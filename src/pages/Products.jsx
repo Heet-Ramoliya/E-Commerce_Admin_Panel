@@ -9,11 +9,23 @@ import {
   FiChevronDown,
   FiChevronUp,
 } from "react-icons/fi";
-import { Card, Input, Select, Button, Badge, Modal } from "../components";
+import {
+  Card,
+  Input,
+  Select,
+  Button,
+  Badge,
+  Modal,
+  Loading,
+} from "../components";
+import { collection, onSnapshot, doc, deleteDoc } from "firebase/firestore";
+import { db } from "../Config/Firebase";
+import { toast } from "react-toastify";
 
-export default function Products() {
+const Products = () => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortField, setSortField] = useState("name");
   const [sortDirection, setSortDirection] = useState("asc");
@@ -22,93 +34,23 @@ export default function Products() {
   const [productToDelete, setProductToDelete] = useState(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const mockProducts = [
-        {
-          id: "1",
-          name: "Wireless Earbuds",
-          category: "Electronics",
-          price: 49.99,
-          stock: 45,
-          image:
-            "https://images.pexels.com/photos/3780681/pexels-photo-3780681.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: true,
-        },
-        {
-          id: "2",
-          name: "Smart Watch",
-          category: "Electronics",
-          price: 99.99,
-          stock: 32,
-          image:
-            "https://images.pexels.com/photos/437037/pexels-photo-437037.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: true,
-        },
-        {
-          id: "3",
-          name: "Bluetooth Speaker",
-          category: "Electronics",
-          price: 59.99,
-          stock: 27,
-          image:
-            "https://images.pexels.com/photos/1279107/pexels-photo-1279107.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: false,
-        },
-        {
-          id: "4",
-          name: "Laptop Backpack",
-          category: "Accessories",
-          price: 39.99,
-          stock: 54,
-          image:
-            "https://images.pexels.com/photos/1546003/pexels-photo-1546003.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: false,
-        },
-        {
-          id: "5",
-          name: "Mechanical Keyboard",
-          category: "Electronics",
-          price: 79.99,
-          stock: 18,
-          image:
-            "https://images.pexels.com/photos/3937174/pexels-photo-3937174.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: false,
-        },
-        {
-          id: "6",
-          name: "HD Webcam",
-          category: "Electronics",
-          price: 49.99,
-          stock: 23,
-          image:
-            "https://images.pexels.com/photos/1772123/pexels-photo-1772123.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: false,
-        },
-        {
-          id: "7",
-          name: "Desk Lamp",
-          category: "Home",
-          price: 29.99,
-          stock: 42,
-          image:
-            "https://images.pexels.com/photos/1112598/pexels-photo-1112598.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: true,
-        },
-        {
-          id: "8",
-          name: "Water Bottle",
-          category: "Lifestyle",
-          price: 19.99,
-          stock: 67,
-          image:
-            "https://images.pexels.com/photos/1000084/pexels-photo-1000084.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          featured: false,
-        },
-      ];
-      setProducts(mockProducts);
-      setLoading(false);
-    }, 500);
-    return () => clearTimeout(timer);
+    const unsubscribe = onSnapshot(
+      collection(db, "products"),
+      (snapshot) => {
+        const productsData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        setProducts(productsData);
+        setLoading(false);
+      },
+      (error) => {
+        console.error(error);
+        toast.error("Failed to fetch products.");
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
   const confirmDelete = (product) => {
@@ -116,10 +58,62 @@ export default function Products() {
     setShowDeleteModal(true);
   };
 
-  const deleteProduct = () => {
-    setProducts(products.filter((p) => p.id !== productToDelete.id));
-    setShowDeleteModal(false);
-    setProductToDelete(null);
+  const deleteProduct = async () => {
+    if (!productToDelete) return;
+    setDeleteLoading(true);
+    try {
+      const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+      const apiSecret = import.meta.env.VITE_CLOUDINARY_API_SECRET;
+      const imagePublicIds = (productToDelete.imageUrls || []).map((url) => {
+        const parts = url.split("/");
+        const fileName = parts[parts.length - 1].split(".")[0];
+        return `products/${productToDelete.id}/${fileName}`;
+      });
+
+      for (const publicId of imagePublicIds) {
+        const timestamp = Math.round(new Date().getTime() / 1000);
+        const stringToSign = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+        const signature = await crypto.subtle.digest(
+          "SHA-1",
+          new TextEncoder().encode(stringToSign)
+        );
+        const signatureHex = Array.from(new Uint8Array(signature))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+        const formData = new FormData();
+        formData.append("public_id", publicId);
+        formData.append("signature", signatureHex);
+        formData.append("api_key", import.meta.env.VITE_CLOUDINARY_API_KEY);
+        formData.append("timestamp", timestamp);
+
+        const response = await fetch(
+          `https://api.cloudinary.com/v1_1/${cloudName}/image/destroy`,
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          console.error(`Failed to delete image ${publicId}:`, data);
+        }
+      }
+
+      const productRef = doc(db, "products", productToDelete.id);
+      await deleteDoc(productRef);
+
+      setProducts(products.filter((p) => p.id !== productToDelete.id));
+      toast.success("Product deleted successfully");
+    } catch (error) {
+      console.error("Error deleting product:", error);
+      toast.error("Failed to delete product. Please try again.");
+    } finally {
+      setDeleteLoading(false);
+      setShowDeleteModal(false);
+      setProductToDelete(null);
+    }
   };
 
   const handleSort = (field) => {
@@ -131,7 +125,6 @@ export default function Products() {
     }
   };
 
-  // Filter and sort products
   const filteredProducts = products
     .filter((product) => {
       const matchesSearch = product.name
@@ -145,7 +138,7 @@ export default function Products() {
       if (sortField === "name") {
         return sortDirection === "asc"
           ? a.name.localeCompare(b.name)
-          : b.name.localeCompare(a.name);
+          : b.name.localeCompare(b.name);
       } else if (sortField === "price") {
         return sortDirection === "asc" ? a.price - b.price : b.price - a.price;
       } else if (sortField === "stock") {
@@ -154,7 +147,6 @@ export default function Products() {
       return 0;
     });
 
-  // Get unique categories for filter
   const categories = [
     { value: "all", label: "All Categories" },
     ...[...new Set(products.map((product) => product.category))].map(
@@ -165,7 +157,6 @@ export default function Products() {
     ),
   ];
 
-  // Render sort indicator
   const renderSortIndicator = (field) => {
     if (sortField !== field) return null;
     return sortDirection === "asc" ? (
@@ -174,6 +165,10 @@ export default function Products() {
       <FiChevronDown className="inline ml-1" />
     );
   };
+
+  if (loading) {
+    return <Loading size="md" message="Loading products..." />;
+  }
 
   return (
     <div className="p-6">
@@ -229,14 +224,7 @@ export default function Products() {
         </div>
       </Card>
 
-      {/* Products Grid */}
-      {loading ? (
-        <Card className="p-8 text-center">
-          <p className="text-secondary-600 dark:text-secondary-400">
-            Loading products...
-          </p>
-        </Card>
-      ) : filteredProducts.length === 0 ? (
+      {filteredProducts.length === 0 ? (
         <Card className="p-8 text-center">
           <p className="text-secondary-600 dark:text-secondary-400">
             No products found.
@@ -248,19 +236,14 @@ export default function Products() {
             <Card key={product.id} className="overflow-hidden flex flex-col">
               <div className="relative h-48 bg-secondary-100 dark:bg-secondary-700 rounded-t-lg overflow-hidden">
                 <img
-                  src={product.image}
+                  src={
+                    product.imageUrls && product.imageUrls.length > 0
+                      ? product.imageUrls[0]
+                      : "https://via.placeholder.com/150"
+                  }
                   alt={product.name}
                   className="w-full h-full object-cover"
                 />
-                {product.featured && (
-                  <Badge
-                    variant="accent"
-                    className="absolute top-2 left-2 text-xs font-bold"
-                    rounded
-                  >
-                    Featured
-                  </Badge>
-                )}
               </div>
               <div className="p-4 flex-1 flex flex-col">
                 <h3 className="text-lg font-semibold text-secondary-900 dark:text-white">
@@ -294,6 +277,7 @@ export default function Products() {
                       variant="secondary"
                       icon={FiEdit2}
                       className="w-full"
+                      disabled={deleteLoading}
                     >
                       Edit
                     </Button>
@@ -303,6 +287,7 @@ export default function Products() {
                     icon={FiTrash2}
                     onClick={() => confirmDelete(product)}
                     className="flex-1 w-full"
+                    disabled={deleteLoading}
                   >
                     Delete
                   </Button>
@@ -313,7 +298,6 @@ export default function Products() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
       <Modal
         isOpen={showDeleteModal}
         onClose={() => setShowDeleteModal(false)}
@@ -324,14 +308,24 @@ export default function Products() {
           cannot be undone.
         </p>
         <div className="flex justify-end space-x-3">
-          <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>
+          <Button
+            variant="secondary"
+            onClick={() => setShowDeleteModal(false)}
+            disabled={deleteLoading}
+          >
             Cancel
           </Button>
-          <Button variant="danger" onClick={deleteProduct}>
-            Delete
+          <Button
+            variant="danger"
+            onClick={deleteProduct}
+            disabled={deleteLoading}
+          >
+            {deleteLoading ? "Deleting..." : "Delete"}
           </Button>
         </div>
       </Modal>
     </div>
   );
-}
+};
+
+export default Products;

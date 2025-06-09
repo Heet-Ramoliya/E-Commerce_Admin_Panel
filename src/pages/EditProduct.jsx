@@ -2,9 +2,17 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { FiSave, FiX, FiUpload } from "react-icons/fi";
 import { toast } from "react-toastify";
-import { Card, Input, Select, Button } from "../components";
+import { Card, Input, Select, Button, Loading } from "../components";
+import {
+  collection,
+  onSnapshot,
+  doc,
+  getDoc,
+  updateDoc,
+} from "firebase/firestore";
+import { db } from "../Config/Firebase";
 
-export default function EditProduct() {
+const EditProduct = () => {
   const { id } = useParams();
   const navigate = useNavigate();
 
@@ -14,75 +22,61 @@ export default function EditProduct() {
     price: "",
     category: "",
     stock: "",
-    featured: false,
     images: [],
   });
 
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [previewImages, setPreviewImages] = useState([]);
+  const [categories, setCategories] = useState([]);
 
-  // Available categories - would be fetched from Firebase in production
-  const categories = [
-    { value: "", label: "Select Category" },
-    { value: "Electronics", label: "Electronics" },
-    { value: "Accessories", label: "Accessories" },
-    { value: "Home", label: "Home" },
-    { value: "Lifestyle", label: "Lifestyle" },
-    { value: "Clothing", label: "Clothing" },
-  ];
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, "categories"),
+      (snapshot) => {
+        const categoriesData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          name: doc.data().name,
+        }));
+        setCategories(categoriesData);
+        setLoading(false);
+      },
+      (error) => {
+        console.error(error);
+        toast.error("Failed to fetch categories.");
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
 
-  // Fetch product data
   useEffect(() => {
     const fetchProduct = async () => {
+      setInitialLoading(true);
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        const productRef = doc(db, "products", id);
+        const productSnap = await getDoc(productRef);
 
-        // Mock product data - would be fetched from Firebase in production
-        const mockProducts = [
-          {
-            id: "1",
-            name: "Wireless Earbuds",
-            description:
-              "High-quality wireless earbuds with noise cancellation.",
-            category: "Electronics",
-            price: 49.99,
-            stock: 45,
-            featured: true,
-            image:
-              "https://images.pexels.com/photos/3780681/pexels-photo-3780681.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          },
-          {
-            id: "2",
-            name: "Smart Watch",
-            description: "Smart watch with health tracking features.",
-            category: "Electronics",
-            price: 99.99,
-            stock: 32,
-            featured: true,
-            image:
-              "https://images.pexels.com/photos/437037/pexels-photo-437037.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-          },
-        ];
-
-        const foundProduct = mockProducts.find((p) => p.id === id);
-
-        if (foundProduct) {
+        if (productSnap.exists()) {
+          const data = productSnap.data();
           setProduct({
-            ...foundProduct,
-            price: foundProduct.price.toString(),
-            stock: foundProduct.stock.toString(),
+            ...data,
+            price: data.price?.toString() || "",
+            stock: data.stock?.toString() || "",
             images: [],
+            category: data.category || "",
           });
 
-          if (foundProduct.image) {
-            setPreviewImages([
-              {
-                url: foundProduct.image,
-                name: "Current image",
+          if (data.imageUrls) {
+            setPreviewImages(
+              data.imageUrls.map((url, index) => ({
+                url,
+                name: `Image ${index + 1}`,
                 existing: true,
-              },
-            ]);
+              }))
+            );
+          } else {
+            setPreviewImages([]);
           }
         } else {
           toast.error("Product not found");
@@ -100,22 +94,31 @@ export default function EditProduct() {
     fetchProduct();
   }, [id, navigate]);
 
-  // Handle form input changes
   const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
+    const { name, value } = e.target;
     setProduct({
       ...product,
-      [name]: type === "checkbox" ? checked : value,
+      [name]: value,
     });
   };
 
-  // Handle image upload
   const handleImageUpload = (e) => {
     const files = Array.from(e.target.files);
 
     if (files.length === 0) return;
 
-    const newPreviewImages = files.map((file) => ({
+    const maxSize = 10 * 1024 * 1024;
+    const validFiles = files.filter((file) => {
+      if (file.size > maxSize) {
+        toast.error(`Image ${file.name} exceeds 10MB limit`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) return;
+
+    const newPreviewImages = validFiles.map((file) => ({
       url: URL.createObjectURL(file),
       name: file.name,
     }));
@@ -126,11 +129,10 @@ export default function EditProduct() {
 
     setProduct({
       ...product,
-      images: [...product.images, ...files],
+      images: [...product.images, ...validFiles],
     });
   };
 
-  // Remove preview image
   const removeImage = (index) => {
     const updatedPreviews = [...previewImages];
 
@@ -148,9 +150,9 @@ export default function EditProduct() {
     setPreviewImages(updatedPreviews);
   };
 
-  // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
 
     if (
       !product.name ||
@@ -159,31 +161,71 @@ export default function EditProduct() {
       !product.stock
     ) {
       toast.error("Please fill in all required fields");
+      setLoading(false);
       return;
     }
 
     try {
-      setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      console.log("Product to update:", product);
+      const existingImageUrls = previewImages
+        .filter((img) => img.existing)
+        .map((img) => img.url);
+
+      const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+      const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+      const newImageUrls = [];
+
+      for (const image of product.images) {
+        const formData = new FormData();
+        formData.append("file", image);
+        formData.append("upload_preset", uploadPreset);
+
+        const response = await fetch(
+          `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+          {
+            method: "POST",
+            body: formData,
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error?.message || "Image upload failed");
+        }
+
+        newImageUrls.push(data.secure_url);
+      }
+
+      const allImageUrls = [...existingImageUrls, ...newImageUrls];
+
+      const productData = {
+        name: product.name,
+        description: product.description,
+        price: parseFloat(product.price),
+        category: product.category,
+        stock: parseInt(product.stock, 10),
+        imageUrls: allImageUrls,
+      };
+
+      const productRef = doc(db, "products", id);
+      await updateDoc(productRef, productData);
+
       toast.success("Product updated successfully");
       navigate("/products");
     } catch (error) {
       console.error("Error updating product:", error);
-      toast.error("Failed to update product");
+      toast.error("Failed to update product. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
+  const categoryOptions = categories.map((category) => ({
+    value: category.name,
+    label: category.name,
+  }));
+
   if (initialLoading) {
-    return (
-      <Card className="p-8 text-center">
-        <p className="text-secondary-600 dark:text-secondary-400">
-          Loading product...
-        </p>
-      </Card>
-    );
+    return <Loading size="md" message="Loading product..." />;
   }
 
   return (
@@ -196,6 +238,7 @@ export default function EditProduct() {
           variant="secondary"
           onClick={() => navigate("/products")}
           icon={FiX}
+          disabled={loading}
         >
           Cancel
         </Button>
@@ -203,7 +246,6 @@ export default function EditProduct() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Basic Information */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
               Basic Information
@@ -218,6 +260,7 @@ export default function EditProduct() {
                 onChange={handleChange}
                 required
                 placeholder="Enter product name"
+                disabled={loading}
               />
               <Input
                 label="Description"
@@ -228,6 +271,7 @@ export default function EditProduct() {
                 onChange={handleChange}
                 rows="4"
                 placeholder="Enter product description"
+                disabled={loading}
               />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
@@ -241,6 +285,7 @@ export default function EditProduct() {
                   min="0"
                   step="0.01"
                   placeholder="0.00"
+                  disabled={loading}
                 />
                 <Input
                   label="Stock"
@@ -252,6 +297,7 @@ export default function EditProduct() {
                   required
                   min="0"
                   placeholder="0"
+                  disabled={loading}
                 />
               </div>
               <Select
@@ -260,29 +306,13 @@ export default function EditProduct() {
                 name="category"
                 value={product.category}
                 onChange={handleChange}
-                options={categories}
+                options={categoryOptions}
                 required
+                disabled={loading}
               />
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="featured"
-                  name="featured"
-                  checked={product.featured}
-                  onChange={handleChange}
-                  className="w-4 h-4 text-primary-600 border-secondary-300 rounded focus:ring-primary-500"
-                />
-                <label
-                  htmlFor="featured"
-                  className="ml-2 text-sm font-medium text-secondary-700 dark:text-secondary-300"
-                >
-                  Featured Product
-                </label>
-              </div>
             </div>
           </Card>
 
-          {/* Product Images */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
               Product Images
@@ -292,24 +322,24 @@ export default function EditProduct() {
                 <div className="text-center">
                   <FiUpload className="mx-auto h-12 w-12 text-secondary-400" />
                   <div className="mt-2">
-                    <label htmlFor="images">
-                      <Button
-                        variant="secondary"
-                        as="span"
-                        className="cursor-pointer"
-                      >
+                    <label
+                      htmlFor="images"
+                      className="inline-block cursor-pointer"
+                    >
+                      <span className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-secondary-600 hover:bg-secondary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary-500 disabled:opacity-50 disabled:cursor-not-allowed">
                         Upload Images
-                      </Button>
-                      <input
-                        id="images"
-                        name="images"
-                        type="file"
-                        multiple
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="sr-only"
-                      />
+                      </span>
                     </label>
+                    <input
+                      id="images"
+                      name="images"
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="sr-only"
+                      disabled={loading}
+                    />
                   </div>
                   <p className="text-xs text-secondary-500 dark:text-secondary-400 mt-2">
                     PNG, JPG, GIF up to 10MB
@@ -333,6 +363,7 @@ export default function EditProduct() {
                         className="absolute top-1 right-1 p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
                         onClick={() => removeImage(index)}
                         icon={FiX}
+                        disabled={loading}
                       />
                     </div>
                   ))}
@@ -342,7 +373,6 @@ export default function EditProduct() {
           </Card>
         </div>
 
-        {/* Form Actions */}
         <div className="flex justify-end space-x-3">
           <Button
             variant="secondary"
@@ -363,4 +393,6 @@ export default function EditProduct() {
       </form>
     </div>
   );
-}
+};
+
+export default EditProduct;
