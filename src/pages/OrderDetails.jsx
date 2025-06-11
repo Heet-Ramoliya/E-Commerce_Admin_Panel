@@ -9,85 +9,54 @@ import {
   FiDownload,
 } from "react-icons/fi";
 import { toast } from "react-toastify";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { db } from "../Config/Firebase";
 import { Card, Select, Button, Table, Badge } from "../components";
 
 export default function OrderDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
-
   const [order, setOrder] = useState(null);
   const [loading, setLoading] = useState(true);
   const [newStatus, setNewStatus] = useState("");
 
-  // Fetch order data
+  // Fetch order data from Firestore
   useEffect(() => {
     const fetchOrder = async () => {
       try {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        const orderRef = doc(db, "orders", id);
+        const orderSnap = await getDoc(orderRef);
 
-        const mockOrder = {
-          id: id,
-          customer: {
-            name: "John Doe",
-            email: "john@example.com",
-            phone: "(555) 123-4567",
-          },
-          date: "2023-11-25",
-          total: 129.99,
-          subtotal: 119.99,
-          tax: 10.0,
-          shipping: 0.0,
-          status: "Delivered",
-          paymentMethod: "Credit Card",
-          shippingAddress: {
-            street: "123 Main St",
-            city: "Anytown",
-            state: "CA",
-            zipCode: "90210",
-            country: "USA",
-          },
-          billingAddress: {
-            street: "123 Main St",
-            city: "Anytown",
-            state: "CA",
-            zipCode: "90210",
-            country: "USA",
-          },
-          items: [
+        if (!orderSnap.exists()) {
+          throw new Error("Order not found");
+        }
+
+        const data = orderSnap.data();
+        const orderData = {
+          id: orderSnap.id,
+          ...data,
+          date: data.createdAt
+            ? new Date(data.createdAt.seconds * 1000)
+                .toISOString()
+                .split("T")[0]
+            : "N/A",
+          timeline: data.timeline || [
             {
-              id: "1",
-              name: "Wireless Earbuds",
-              price: 49.99,
-              quantity: 1,
-              image:
-                "https://images.pexels.com/photos/3780681/pexels-photo-3780681.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
+              status: data.status || "Order Placed",
+              date: data.createdAt
+                ? new Date(data.createdAt.seconds * 1000).toLocaleString()
+                : "N/A",
             },
-            {
-              id: "2",
-              name: "Smart Watch",
-              price: 69.99,
-              quantity: 1,
-              image:
-                "https://images.pexels.com/photos/437037/pexels-photo-437037.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1",
-            },
-          ],
-          timeline: [
-            { status: "Order Placed", date: "2023-11-25 09:15 AM" },
-            { status: "Payment Confirmed", date: "2023-11-25 09:17 AM" },
-            { status: "Processing", date: "2023-11-25 10:30 AM" },
-            { status: "Shipped", date: "2023-11-26 02:45 PM" },
-            { status: "Delivered", date: "2023-11-28 11:20 AM" },
           ],
         };
 
-        setOrder(mockOrder);
-        setNewStatus(mockOrder.status);
+        setOrder(orderData);
+        setNewStatus(orderData.status || "Pending");
+        setLoading(false);
       } catch (error) {
         console.error("Error fetching order:", error);
         toast.error("Failed to fetch order");
         navigate("/orders");
-      } finally {
-        setLoading(false);
       }
     };
 
@@ -97,15 +66,22 @@ export default function OrderDetails() {
   // Update order status
   const updateOrderStatus = async () => {
     try {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      setOrder({
-        ...order,
+      const orderRef = doc(db, "orders", id);
+      await updateDoc(orderRef, {
         status: newStatus,
         timeline: [
-          ...order.timeline,
+          ...(order?.timeline || []),
           { status: newStatus, date: new Date().toLocaleString() },
         ],
       });
+      setOrder((prev) => ({
+        ...prev,
+        status: newStatus,
+        timeline: [
+          ...prev.timeline,
+          { status: newStatus, date: new Date().toLocaleString() },
+        ],
+      }));
       toast.success(`Order status updated to ${newStatus}`);
     } catch (error) {
       console.error("Error updating order status:", error);
@@ -122,11 +98,12 @@ export default function OrderDetails() {
         <div className="flex items-center">
           <img
             src={row.image}
-            alt={value}
+            alt={value || "Product"}
             className="h-10 w-10 rounded object-cover mr-3"
+            onError={(e) => (e.target.src = "https://via.placeholder.com/40")}
           />
           <span className="text-sm font-medium text-secondary-900 dark:text-white">
-            {value}
+            {value || "N/A"}
           </span>
         </div>
       ),
@@ -135,18 +112,23 @@ export default function OrderDetails() {
       header: "Quantity",
       field: "quantity",
       className: "text-center",
+      render: (value) => value || "0",
     },
     {
       header: "Price",
       field: "price",
       className: "text-right",
-      render: (value) => `$${value.toFixed(2)}`,
+      render: (value) =>
+        typeof value === "number" ? `$${value.toFixed(2)}` : "N/A",
     },
     {
       header: "Total",
       field: "",
       className: "text-right",
-      render: (_, row) => `$${(row.price * row.quantity).toFixed(2)}`,
+      render: (_, row) =>
+        typeof row.price === "number" && typeof row.quantity === "number"
+          ? `$${(row.price * row.quantity).toFixed(2)}`
+          : "N/A",
     },
   ];
 
@@ -220,15 +202,13 @@ export default function OrderDetails() {
                   ? "primary"
                   : order.status === "Shipped"
                   ? "accent"
-                  : order.status === "Pending" ||
-                    order.status === "Order Placed" ||
-                    order.status === "Payment Confirmed"
+                  : order.status === "Pending"
                   ? "warning"
                   : "danger"
               }
               rounded
             >
-              {order.status}
+              {order.status || "Unknown"}
             </Badge>
           </div>
           <div className="flex items-center space-x-3">
@@ -265,42 +245,52 @@ export default function OrderDetails() {
             </h2>
             <Table
               columns={orderColumns}
-              data={order.items}
-              footer={
-                <div className="space-y-2 pt-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium text-secondary-600 dark:text-secondary-400">
-                      Subtotal
-                    </span>
-                    <span className="font-medium text-secondary-900 dark:text-white">
-                      ${order.subtotal.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium text-secondary-600 dark:text-secondary-400">
-                      Tax
-                    </span>
-                    <span className="font-medium text-secondary-900 dark:text-white">
-                      ${order.tax.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium text-secondary-600 dark:text-secondary-400">
-                      Shipping
-                    </span>
-                    <span className="font-medium text-secondary-900 dark:text-white">
-                      {order.shipping > 0
-                        ? `$${order.shipping.toFixed(2)}`
-                        : "Free"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-base font-bold text-secondary-900 dark:text-white pt-2 border-t border-secondary-200 dark:border-secondary-700">
-                    <span>Total</span>
-                    <span>${order.total.toFixed(2)}</span>
-                  </div>
-                </div>
-              }
+              data={order.items || []}
+              className="border-none"
+              emptyMessage="No items in this order."
             />
+            <div className="space-y-2 pt-2">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium text-secondary-600 dark:text-secondary-400">
+                  Subtotal
+                </span>
+                <span className="font-medium text-secondary-900 dark:text-white">
+                  {typeof order.subtotal === "number"
+                    ? `$${order.subtotal.toFixed(2)}`
+                    : "N/A"}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="font-medium text-secondary-600 dark:text-secondary-400">
+                  Tax
+                </span>
+                <span className="font-medium text-secondary-900 dark:text-white">
+                  {typeof order.tax === "number"
+                    ? `$${order.tax.toFixed(2)}`
+                    : "N/A"}
+                </span>
+              </div>
+              {/* <div className="flex justify-between text-sm">
+                <span className="font-medium text-secondary-600 dark:text-secondary-400">
+                  Shipping
+                </span>
+                <span className="font-medium text-secondary-900 dark:text-white">
+                  {typeof order.shipping === "number"
+                    ? order.shipping > 0
+                      ? `$${order.shipping.toFixed(2)}`
+                      : "Free"
+                    : "N/A"}
+                </span>
+              </div> */}
+              <div className="flex justify-between text-base font-bold text-secondary-900 dark:text-white pt-2 border-t border-secondary-200 dark:border-secondary-700">
+                <span>Total</span>
+                <span>
+                  {typeof order.total === "number"
+                    ? `$${order.total.toFixed(2)}`
+                    : "N/A"}
+                </span>
+              </div>
+            </div>
           </Card>
 
           {/* Order Timeline */}
@@ -359,13 +349,14 @@ export default function OrderDetails() {
             </h2>
             <div className="space-y-3">
               <p className="text-sm font-medium text-secondary-900 dark:text-white">
-                {order.customer.name}
+                {order.customer
+                  ? `${order.customer.firstName || ""} ${
+                      order.customer.lastName || ""
+                    }`.trim() || "N/A"
+                  : "N/A"}
               </p>
               <p className="text-sm text-secondary-600 dark:text-secondary-400">
-                {order.customer.email}
-              </p>
-              <p className="text-sm text-secondary-600 dark:text-secondary-400">
-                {order.customer.phone}
+                {order.customer?.email || "N/A"}
               </p>
             </div>
           </Card>
@@ -376,27 +367,16 @@ export default function OrderDetails() {
               Shipping Address
             </h2>
             <div className="space-y-1 text-sm text-secondary-600 dark:text-secondary-400">
-              <p>{order.shippingAddress.street}</p>
+              <p>{order.shippingAddress?.street || "N/A"}</p>
               <p>
-                {order.shippingAddress.city}, {order.shippingAddress.state}{" "}
-                {order.shippingAddress.zipCode}
+                {order.shippingAddress?.city || ""}
+                {order.shippingAddress?.city ? ", " : ""}
+                {order.shippingAddress?.state || ""}{" "}
+                {order.shippingAddress?.zip ||
+                  order.shippingAddress?.zipCode ||
+                  ""}
               </p>
-              <p>{order.shippingAddress.country}</p>
-            </div>
-          </Card>
-
-          {/* Billing Address */}
-          <Card>
-            <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
-              Billing Address
-            </h2>
-            <div className="space-y-1 text-sm text-secondary-600 dark:text-secondary-400">
-              <p>{order.billingAddress.street}</p>
-              <p>
-                {order.billingAddress.city}, {order.billingAddress.state}{" "}
-                {order.billingAddress.zipCode}
-              </p>
-              <p>{order.billingAddress.country}</p>
+              <p>{order.shippingAddress?.country || "N/A"}</p>
             </div>
           </Card>
 
@@ -411,7 +391,7 @@ export default function OrderDetails() {
                   Method
                 </p>
                 <p className="text-sm text-secondary-900 dark:text-white">
-                  {order.paymentMethod}
+                  {order.paymentMethod || "N/A"}
                 </p>
               </div>
               <div>
@@ -419,7 +399,7 @@ export default function OrderDetails() {
                   Status
                 </p>
                 <p className="text-sm text-success-600 dark:text-success-400">
-                  Paid
+                  {order.paymentIntentId ? "Paid" : "Pending"}
                 </p>
               </div>
             </div>

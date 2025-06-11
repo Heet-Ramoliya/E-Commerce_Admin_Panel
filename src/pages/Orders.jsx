@@ -2,129 +2,100 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { FiSearch, FiFilter, FiEye, FiCalendar } from "react-icons/fi";
 import { Card, Input, Select, Button, Table, Badge } from "../components";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "../Config/Firebase";
+import { toast } from "react-toastify";
+import { useDebounce } from "use-debounce";
 
 export default function Orders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateRange, setDateRange] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
 
+  const [debouncedSearch] = useDebounce(searchQuery, 300);
+
+  // Fetch orders from Firestore and convert createdAt to date
   useEffect(() => {
-    const timer = setTimeout(() => {
-      const mockOrders = [
-        {
-          id: "1001",
-          customer: { name: "John Doe", email: "john@example.com" },
-          date: "2023-11-25",
-          total: 129.99,
-          status: "Delivered",
-          items: 3,
-          paymentMethod: "Credit Card",
-        },
-        {
-          id: "1002",
-          customer: { name: "Jane Smith", email: "jane@example.com" },
-          date: "2023-11-24",
-          total: 89.95,
-          status: "Processing",
-          items: 2,
-          paymentMethod: "PayPal",
-        },
-        {
-          id: "1003",
-          customer: { name: "Robert Johnson", email: "robert@example.com" },
-          date: "2023-11-24",
-          total: 45.5,
-          status: "Shipped",
-          items: 1,
-          paymentMethod: "Credit Card",
-        },
-        {
-          id: "1004",
-          customer: { name: "Emily Davis", email: "emily@example.com" },
-          date: "2023-11-23",
-          total: 199.99,
-          status: "Pending",
-          items: 4,
-          paymentMethod: "PayPal",
-        },
-        {
-          id: "1005",
-          customer: { name: "Michael Wilson", email: "michael@example.com" },
-          date: "2023-11-22",
-          total: 74.99,
-          status: "Delivered",
-          items: 2,
-          paymentMethod: "Credit Card",
-        },
-        {
-          id: "1006",
-          customer: { name: "Sarah Brown", email: "sarah@example.com" },
-          date: "2023-11-22",
-          total: 149.95,
-          status: "Cancelled",
-          items: 3,
-          paymentMethod: "Credit Card",
-        },
-        {
-          id: "1007",
-          customer: { name: "David Miller", email: "david@example.com" },
-          date: "2023-11-20",
-          total: 29.99,
-          status: "Delivered",
-          items: 1,
-          paymentMethod: "PayPal",
-        },
-        {
-          id: "1008",
-          customer: { name: "Jessica Taylor", email: "jessica@example.com" },
-          date: "2023-11-18",
-          total: 59.99,
-          status: "Delivered",
-          items: 2,
-          paymentMethod: "Credit Card",
-        },
-      ];
-      setOrders(mockOrders);
-      setLoading(false);
-    }, 500);
-    return () => clearTimeout(timer);
+    const unsubscribe = onSnapshot(
+      collection(db, "orders"),
+      (snapshot) => {
+        const ordersData = snapshot.docs.map((doc) => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            date: data.createdAt
+              ? new Date(data.createdAt.seconds * 1000)
+                  .toISOString()
+                  .split("T")[0]
+              : null,
+          };
+        });
+        setOrders(ordersData);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error fetching orders:", error);
+        toast.error("Failed to fetch orders.");
+        setLoading(false);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
-  // Filter orders based on search, status, and date
+  // Filter orders based on search, status, and date range
   const filteredOrders = orders.filter((order) => {
     const matchesSearch =
-      order.id.includes(searchTerm) ||
-      order.customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.customer.email.toLowerCase().includes(searchTerm.toLowerCase());
+      (order.id || "").includes(debouncedSearch) ||
+      `${order.customer?.firstName || ""} ${order.customer?.lastName || ""}`
+        .toLowerCase()
+        .trim()
+        .includes(debouncedSearch.toLowerCase()) ||
+      (order.customer?.email || "")
+        .toLowerCase()
+        .includes(debouncedSearch.toLowerCase());
     const matchesStatus =
       statusFilter === "all" || order.status === statusFilter;
     let matchesDate = true;
-    const orderDate = new Date(order.date);
+    const orderDate = order.date ? new Date(order.date) : null;
     const today = new Date();
     if (dateRange === "today") {
-      const todayStr = today.toISOString().split("T")[0];
-      matchesDate = order.date === todayStr;
+      matchesDate =
+        orderDate &&
+        orderDate.toISOString().split("T")[0] ===
+          today.toISOString().split("T")[0];
     } else if (dateRange === "week") {
       const oneWeekAgo = new Date(today);
       oneWeekAgo.setDate(today.getDate() - 7);
-      matchesDate = orderDate >= oneWeekAgo;
+      matchesDate = orderDate && orderDate >= oneWeekAgo;
     } else if (dateRange === "month") {
       const oneMonthAgo = new Date(today);
       oneMonthAgo.setMonth(today.getMonth() - 1);
-      matchesDate = orderDate >= oneMonthAgo;
+      matchesDate = orderDate && orderDate >= oneMonthAgo;
     }
     return matchesSearch && matchesStatus && matchesDate;
   });
 
-  // Table Columns
+  // Paginate filtered orders
+  const paginatedOrders = filteredOrders.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+  const totalPages = Math.ceil(filteredOrders.length / pageSize);
+
+  // Table columns configuration
   const orderColumns = [
     {
       header: "Order ID",
       field: "id",
       render: (value) => (
-        <span className="text-primary-600 dark:text-primary-400">#{value}</span>
+        <span className="text-primary-600 dark:text-primary-400">
+          #{value || "N/A"}
+        </span>
       ),
     },
     {
@@ -133,19 +104,28 @@ export default function Orders() {
       render: (customer) => (
         <div>
           <div className="text-sm font-medium text-secondary-900 dark:text-white">
-            {customer.name}
+            {customer
+              ? `${customer.firstName || ""} ${
+                  customer.lastName || ""
+                }`.trim() || "N/A"
+              : "N/A"}
           </div>
           <div className="text-sm text-secondary-500 dark:text-secondary-400">
-            {customer.email}
+            {customer?.email || "N/A"}
           </div>
         </div>
       ),
     },
-    { header: "Date", field: "date" },
+    {
+      header: "Date",
+      field: "date",
+      render: (value) => (value ? value : "N/A"),
+    },
     {
       header: "Total",
       field: "total",
-      render: (value) => `$${value.toFixed(2)}`,
+      render: (value) =>
+        typeof value === "number" ? `$${value.toFixed(2)}` : "N/A",
     },
     {
       header: "Status",
@@ -165,11 +145,20 @@ export default function Orders() {
           }
           rounded
         >
-          {status}
+          {status || "Unknown"}
         </Badge>
       ),
     },
-    { header: "Items", field: "items" },
+    {
+      header: "Items",
+      field: "items",
+      render: (items, row) => {
+        console.log("Rendering items for row:", row.id, items); // Debug log
+        return Array.isArray(items)
+          ? `${items.length} item${items.length !== 1 ? "s" : ""}`
+          : "0 items";
+      },
+    },
     {
       header: "Actions",
       field: "id",
@@ -198,8 +187,8 @@ export default function Orders() {
         <div className="flex flex-col md:flex-row md:items-center gap-4">
           <Input
             placeholder="Search orders..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
             icon={FiSearch}
             className="w-full md:w-64"
           />
@@ -240,44 +229,78 @@ export default function Orders() {
       <Card>
         <Table
           columns={orderColumns}
-          data={filteredOrders}
+          data={paginatedOrders}
           loading={loading}
           emptyMessage="No orders found."
-          footer={
-            <div className="px-4 py-3 flex items-center justify-between border-t border-secondary-200 dark:border-secondary-700">
-              <div className="flex-1 flex justify-between sm:hidden">
-                <Button variant="secondary">Previous</Button>
-                <Button variant="secondary">Next</Button>
-              </div>
-              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
-                <p className="text-sm text-secondary-700 dark:text-secondary-400">
-                  Showing <span className="font-medium">1</span> to{" "}
-                  <span className="font-medium">{filteredOrders.length}</span>{" "}
-                  of{" "}
-                  <span className="font-medium">{filteredOrders.length}</span>{" "}
-                  results
-                </p>
-                <nav
-                  className="relative z-0 inline-flex rounded-md -space-x-px"
-                  aria-label="Pagination"
-                >
-                  <Button variant="secondary" className="rounded-l-md" disabled>
-                    Previous
-                  </Button>
-                  <Button
-                    variant="primary"
-                    className="bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400"
-                  >
-                    1
-                  </Button>
-                  <Button variant="secondary" className="rounded-r-md" disabled>
-                    Next
-                  </Button>
-                </nav>
-              </div>
-            </div>
-          }
+          className="border-none"
         />
+        <div className="px-4 py-3 flex items-center justify-between border-t border-secondary-200 dark:border-secondary-700">
+          <div className="flex-1 flex justify-between sm:hidden">
+            <Button
+              variant="secondary"
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(currentPage - 1)}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(currentPage + 1)}
+            >
+              Next
+            </Button>
+          </div>
+          <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+            <p className="text-sm text-secondary-700 dark:text-secondary-400">
+              Showing{" "}
+              <span className="font-medium">
+                {(currentPage - 1) * pageSize + 1}
+              </span>{" "}
+              to{" "}
+              <span className="font-medium">
+                {Math.min(currentPage * pageSize, filteredOrders.length)}
+              </span>{" "}
+              of <span className="font-medium">{filteredOrders.length}</span>{" "}
+              results
+            </p>
+            <nav
+              className="relative z-0 inline-flex rounded-md -space-x-px"
+              aria-label="Pagination"
+            >
+              <Button
+                variant="secondary"
+                className="rounded-l-md"
+                disabled={currentPage === 1}
+                onClick={() => setCurrentPage(currentPage - 1)}
+              >
+                Previous
+              </Button>
+              {[...Array(totalPages)].map((_, index) => (
+                <Button
+                  key={index + 1}
+                  variant={currentPage === index + 1 ? "primary" : "secondary"}
+                  className={
+                    currentPage === index + 1
+                      ? "bg-primary-50 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400"
+                      : ""
+                  }
+                  onClick={() => setCurrentPage(index + 1)}
+                >
+                  {index + 1}
+                </Button>
+              ))}
+              <Button
+                variant="secondary"
+                className="rounded-r-md"
+                disabled={currentPage === totalPages}
+                onClick={() => setCurrentPage(currentPage + 1)}
+              >
+                Next
+              </Button>
+            </nav>
+          </div>
+        </div>
       </Card>
     </div>
   );
