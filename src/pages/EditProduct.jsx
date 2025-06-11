@@ -20,7 +20,6 @@ const EditProduct = () => {
     name: "",
     description: "",
     price: "",
-    category: "",
     stock: "",
     images: [],
   });
@@ -28,23 +27,22 @@ const EditProduct = () => {
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [previewImages, setPreviewImages] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [allCategories, setAllCategories] = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState([]);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
       collection(db, "categories"),
       (snapshot) => {
-        const categoriesData = snapshot.docs.map((doc) => ({
+        const categories = snapshot.docs.map((doc) => ({
           id: doc.id,
           name: doc.data().name,
+          parentId: doc.data().parentId || null,
         }));
-        setCategories(categoriesData);
-        setLoading(false);
+        setAllCategories(categories);
       },
-      (error) => {
-        console.error(error);
+      () => {
         toast.error("Failed to fetch categories.");
-        setLoading(false);
       }
     );
     return () => unsubscribe();
@@ -60,12 +58,25 @@ const EditProduct = () => {
         if (productSnap.exists()) {
           const data = productSnap.data();
           setProduct({
-            ...data,
+            name: data.name || "",
+            description: data.description || "",
             price: data.price?.toString() || "",
             stock: data.stock?.toString() || "",
             images: [],
             category: data.category || "",
           });
+
+          const categoryPath = [];
+          let currentCategory = allCategories.find(
+            (cat) => cat.name === data.category
+          );
+          while (currentCategory) {
+            categoryPath.unshift(currentCategory.name);
+            currentCategory = allCategories.find(
+              (cat) => cat.id === currentCategory.parentId
+            );
+          }
+          setSelectedCategories(categoryPath);
 
           if (data.imageUrls) {
             setPreviewImages(
@@ -75,15 +86,12 @@ const EditProduct = () => {
                 existing: true,
               }))
             );
-          } else {
-            setPreviewImages([]);
           }
         } else {
           toast.error("Product not found");
           navigate("/products");
         }
       } catch (error) {
-        console.error("Error fetching product:", error);
         toast.error("Failed to fetch product");
         navigate("/products");
       } finally {
@@ -91,21 +99,80 @@ const EditProduct = () => {
       }
     };
 
-    fetchProduct();
-  }, [id, navigate]);
+    if (allCategories.length > 0) {
+      fetchProduct();
+    }
+  }, [id, navigate, allCategories]);
 
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setProduct({
-      ...product,
-      [name]: value,
+  const updateInput = (e) => {
+    setProduct({ ...product, [e.target.name]: e.target.value });
+  };
+
+  const updateCategory = (level, value) => {
+    setSelectedCategories((prev) => {
+      const newSelections = [...prev.slice(0, level), value];
+      return newSelections;
     });
+  };
+
+  const getOptions = (level) => {
+    if (level === 0) {
+      return [
+        { value: "", label: "Select Category" },
+        ...allCategories
+          .filter((cat) => cat.parentId === null)
+          .map((cat) => ({ value: cat.name, label: cat.name })),
+      ];
+    }
+
+    const parentName = selectedCategories[level - 1];
+    const parent = allCategories.find((cat) => cat.name === parentName);
+    if (!parent) return [{ value: "", label: "Select Subcategory" }];
+
+    const subCategories = allCategories.filter(
+      (cat) => cat.parentId === parent.id
+    );
+    if (!subCategories.length)
+      return [{ value: "", label: "No Subcategories" }];
+
+    return [
+      { value: "", label: "Select Subcategory" },
+      ...subCategories.map((cat) => ({ value: cat.name, label: cat.name })),
+    ];
+  };
+
+  const getDropdowns = () => {
+    const dropdowns = [];
+
+    for (let level = 0; level <= selectedCategories.length; level++) {
+      if (level > 0 && !selectedCategories[level - 1]) break;
+
+      const options = getOptions(level);
+
+      dropdowns.push({
+        level,
+        label: level === 0 ? "Category" : `Subcategory`,
+        value: selectedCategories[level] || "",
+        options,
+      });
+
+      if (selectedCategories[level]) {
+        const currentCat = allCategories.find(
+          (cat) => cat.name === selectedCategories[level]
+        );
+        const hasSubCategories = allCategories.some(
+          (cat) => cat.parentId === currentCat?.id
+        );
+        if (!hasSubCategories) break;
+      }
+    }
+
+    return dropdowns;
   };
 
   const handleImageUpload = (e) => {
     const files = Array.from(e.target.files);
-
-    if (files.length === 0) return;
+    if (!files.length) return;
 
     const maxSize = 10 * 1024 * 1024;
     const validFiles = files.filter((file) => {
@@ -116,36 +183,28 @@ const EditProduct = () => {
       return true;
     });
 
-    if (validFiles.length === 0) return;
+    if (!validFiles.length) return;
 
-    const newPreviewImages = validFiles.map((file) => ({
+    const newPreviews = validFiles.map((file) => ({
       url: URL.createObjectURL(file),
       name: file.name,
     }));
 
     const currentImages = previewImages.filter((img) => img.existing);
-
-    setPreviewImages([...currentImages, ...newPreviewImages]);
-
-    setProduct({
-      ...product,
-      images: [...product.images, ...validFiles],
-    });
+    setPreviewImages([...currentImages, ...newPreviews]);
+    setProduct({ ...product, images: [...product.images, ...validFiles] });
   };
 
   const removeImage = (index) => {
     const updatedPreviews = [...previewImages];
-
     if (!updatedPreviews[index].existing) {
       URL.revokeObjectURL(updatedPreviews[index].url);
       const updatedImages = [...product.images];
-      updatedImages.splice(index - (previewImages[0]?.existing ? 1 : 0), 1);
-      setProduct({
-        ...product,
-        images: updatedImages,
-      });
+      const imageIndex =
+        index - previewImages.filter((img) => img.existing).length;
+      updatedImages.splice(imageIndex, 1);
+      setProduct({ ...product, images: updatedImages });
     }
-
     updatedPreviews.splice(index, 1);
     setPreviewImages(updatedPreviews);
   };
@@ -157,8 +216,8 @@ const EditProduct = () => {
     if (
       !product.name ||
       !product.price ||
-      !product.category ||
-      !product.stock
+      !product.stock ||
+      !selectedCategories[0]
     ) {
       toast.error("Please fill in all required fields");
       setLoading(false);
@@ -170,17 +229,19 @@ const EditProduct = () => {
         .filter((img) => img.existing)
         .map((img) => img.url);
 
-      const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
-      const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
       const newImageUrls = [];
-
       for (const image of product.images) {
         const formData = new FormData();
         formData.append("file", image);
-        formData.append("upload_preset", uploadPreset);
+        formData.append(
+          "upload_preset",
+          import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
+        );
 
         const response = await fetch(
-          `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+          `https://api.cloudinary.com/v1_1/${
+            import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
+          }/image/upload`,
           {
             method: "POST",
             body: formData,
@@ -188,20 +249,21 @@ const EditProduct = () => {
         );
 
         const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error?.message || "Image upload failed");
-        }
-
+        if (!response.ok) throw new Error("Image upload failed");
         newImageUrls.push(data.secure_url);
       }
 
       const allImageUrls = [...existingImageUrls, ...newImageUrls];
 
+      const finalCategory =
+        selectedCategories[selectedCategories.length - 1] ||
+        selectedCategories[0];
+
       const productData = {
         name: product.name,
         description: product.description,
         price: parseFloat(product.price),
-        category: product.category,
+        category: finalCategory,
         stock: parseInt(product.stock, 10),
         imageUrls: allImageUrls,
       };
@@ -209,20 +271,14 @@ const EditProduct = () => {
       const productRef = doc(db, "products", id);
       await updateDoc(productRef, productData);
 
-      toast.success("Product updated successfully");
+      toast.success("Product updated!");
       navigate("/products");
     } catch (error) {
-      console.error("Error updating product:", error);
-      toast.error("Failed to update product. Please try again.");
+      toast.error("Failed to update product.");
     } finally {
       setLoading(false);
     }
   };
-
-  const categoryOptions = categories.map((category) => ({
-    value: category.name,
-    label: category.name,
-  }));
 
   if (initialLoading) {
     return <Loading size="md" message="Loading product..." />;
@@ -230,6 +286,7 @@ const EditProduct = () => {
 
   return (
     <div className="p-6">
+      {/* Title and Cancel Button */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-secondary-900 dark:text-white">
           Edit Product
@@ -244,35 +301,40 @@ const EditProduct = () => {
         </Button>
       </div>
 
+      {/* Form */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Product Details */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
               Basic Information
             </h2>
             <div className="space-y-4">
+              {/* Name */}
               <Input
                 label="Product Name"
                 id="name"
                 name="name"
                 type="text"
                 value={product.name}
-                onChange={handleChange}
+                onChange={updateInput}
                 required
                 placeholder="Enter product name"
                 disabled={loading}
               />
+              {/* Description */}
               <Input
                 label="Description"
                 id="description"
                 name="description"
                 type="textarea"
                 value={product.description}
-                onChange={handleChange}
+                onChange={updateInput}
                 rows="4"
                 placeholder="Enter product description"
                 disabled={loading}
               />
+              {/* Price and Stock */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   label="Price ($)"
@@ -280,7 +342,7 @@ const EditProduct = () => {
                   name="price"
                   type="number"
                   value={product.price}
-                  onChange={handleChange}
+                  onChange={updateInput}
                   required
                   min="0"
                   step="0.01"
@@ -293,31 +355,39 @@ const EditProduct = () => {
                   name="stock"
                   type="number"
                   value={product.stock}
-                  onChange={handleChange}
+                  onChange={updateInput}
                   required
                   min="0"
                   placeholder="0"
                   disabled={loading}
                 />
               </div>
-              <Select
-                label="Category"
-                id="category"
-                name="category"
-                value={product.category}
-                onChange={handleChange}
-                options={categoryOptions}
-                required
-                disabled={loading}
-              />
+              {/* Category Dropdowns */}
+              {getDropdowns().map((dropdown) => (
+                <Select
+                  key={dropdown.level}
+                  label={dropdown.label}
+                  id={`category-${dropdown.level}`}
+                  name={`category-${dropdown.level}`}
+                  value={dropdown.value}
+                  onChange={(e) =>
+                    updateCategory(dropdown.level, e.target.value)
+                  }
+                  options={dropdown.options}
+                  required={dropdown.level === 0}
+                  disabled={loading}
+                />
+              ))}
             </div>
           </Card>
 
+          {/* Images */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
               Product Images
             </h2>
             <div className="space-y-4">
+              {/* Upload Area */}
               <div className="border-2 border-dashed border-secondary-300 dark:border-secondary-700 rounded-lg p-4">
                 <div className="text-center">
                   <FiUpload className="mx-auto h-12 w-12 text-secondary-400" />
@@ -346,6 +416,7 @@ const EditProduct = () => {
                   </p>
                 </div>
               </div>
+              {/* Image Previews */}
               {previewImages.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   {previewImages.map((image, index) => (
@@ -373,6 +444,7 @@ const EditProduct = () => {
           </Card>
         </div>
 
+        {/* Save and Cancel Buttons */}
         <div className="flex justify-end space-x-3">
           <Button
             variant="secondary"

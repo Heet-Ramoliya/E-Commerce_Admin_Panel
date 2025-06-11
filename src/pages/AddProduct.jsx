@@ -6,93 +6,136 @@ import { Input, Select, Button, Card, Loading } from "../components";
 import { collection, onSnapshot, addDoc } from "firebase/firestore";
 import { db } from "../Config/Firebase";
 
-export default function AddProduct() {
+const AddProduct = () => {
   const navigate = useNavigate();
 
   const [product, setProduct] = useState({
     name: "",
     description: "",
     price: "",
-    category: "",
     stock: "",
     images: [],
   });
 
   const [loading, setLoading] = useState(false);
   const [previewImages, setPreviewImages] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [allCategories, setAllCategories] = useState([]);
+  const [selectedCategories, setSelectedCategories] = useState([]);
 
   useEffect(() => {
     setLoading(true);
     const unsubscribe = onSnapshot(
       collection(db, "categories"),
       (snapshot) => {
-        const categoriesData = snapshot.docs.map((doc) => ({
+        const categories = snapshot.docs.map((doc) => ({
           id: doc.id,
-          ...doc.data(),
+          name: doc.data().name,
+          parentId: doc.data().parentId || null,
         }));
-        const categoryOptions = [
-          { value: "", label: "Select Category" },
-          ...categoriesData.map((category) => ({
-            value: category.name,
-            label: category.name,
-          })),
-        ];
-        setCategories(categoryOptions);
+        setAllCategories(categories);
         setLoading(false);
       },
-      (error) => {
-        console.error("Error fetching categories:", error);
-        toast.error("Failed to fetch categories.");
+      () => {
+        toast.error("Failed to load categories.");
         setLoading(false);
       }
     );
     return () => unsubscribe();
   }, []);
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setProduct({
-      ...product,
-      [name]: type === "checkbox" ? checked : value,
+  const updateInput = (e) => {
+    setProduct({ ...product, [e.target.name]: e.target.value });
+  };
+
+  const updateCategory = (level, value) => {
+    setSelectedCategories((prev) => {
+      const newSelections = [...prev.slice(0, level), value];
+      return newSelections;
     });
   };
 
-  const handleImageUpload = (e) => {
+  const getOptions = (level) => {
+    if (level === 0) {
+      return [
+        { value: "", label: "Select Category" },
+        ...allCategories
+          .filter((cat) => cat.parentId === null)
+          .map((cat) => ({ value: cat.name, label: cat.name })),
+      ];
+    }
+
+    const parentName = selectedCategories[level - 1];
+    const parent = allCategories.find((cat) => cat.name === parentName);
+    if (!parent) return [{ value: "", label: "Select Subcategory" }];
+
+    const subCategories = allCategories.filter(
+      (cat) => cat.parentId === parent.id
+    );
+    if (!subCategories.length)
+      return [{ value: "", label: "No Subcategories" }];
+
+    return [
+      { value: "", label: "Select Subcategory" },
+      ...subCategories.map((cat) => ({ value: cat.name, label: cat.name })),
+    ];
+  };
+
+  const getDropdowns = () => {
+    const dropdowns = [];
+    let showNext = true;
+
+    for (let level = 0; level <= selectedCategories.length; level++) {
+      if (level > 0 && !selectedCategories[level - 1]) break;
+
+      const options = getOptions(level);
+
+      dropdowns.push({
+        level,
+        label: level === 0 ? "Category" : `Subcategory`,
+        value: selectedCategories[level] || "",
+        options,
+      });
+
+      if (selectedCategories[level]) {
+        const currentCat = allCategories.find(
+          (cat) => cat.name === selectedCategories[level]
+        );
+        const hasSubCategories = allCategories.some(
+          (cat) => cat.parentId === currentCat?.id
+        );
+        if (!hasSubCategories) break;
+      }
+    }
+
+    return dropdowns;
+  };
+
+  const addImages = (e) => {
     const files = Array.from(e.target.files);
+    if (!files.length) return;
 
-    if (files.length === 0) return;
-
-    const newPreviewImages = files.map((file) => ({
+    const previews = files.map((file) => ({
       url: URL.createObjectURL(file),
       name: file.name,
     }));
 
-    setPreviewImages([...previewImages, ...newPreviewImages]);
-
-    setProduct({
-      ...product,
-      images: [...product.images, ...files],
-    });
+    setPreviewImages([...previewImages, ...previews]);
+    setProduct({ ...product, images: [...product.images, ...files] });
   };
 
   const removeImage = (index) => {
-    const updatedPreviews = [...previewImages];
-    const updatedImages = [...product.images];
+    const newPreviews = [...previewImages];
+    const newImages = [...product.images];
 
     URL.revokeObjectURL(previewImages[index].url);
+    newPreviews.splice(index, 1);
+    newImages.splice(index, 1);
 
-    updatedPreviews.splice(index, 1);
-    updatedImages.splice(index, 1);
-
-    setPreviewImages(updatedPreviews);
-    setProduct({
-      ...product,
-      images: updatedImages,
-    });
+    setPreviewImages(newPreviews);
+    setProduct({ ...product, images: newImages });
   };
 
-  const handleSubmit = async (e) => {
+  const saveProduct = async (e) => {
     e.preventDefault();
     setLoading(true);
 
@@ -100,59 +143,55 @@ export default function AddProduct() {
       !product.name ||
       !product.price ||
       !product.stock ||
-      !product.category
+      !selectedCategories[0]
     ) {
-      toast.error("Please fill in all required fields");
+      toast.error("Please fill all required fields");
       setLoading(false);
       return;
     }
 
     try {
-      const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
-      const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
       const imageUrls = [];
-
       for (const image of product.images) {
         const formData = new FormData();
         formData.append("file", image);
-        formData.append("upload_preset", uploadPreset);
+        formData.append(
+          "upload_preset",
+          import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
+        );
 
         const response = await fetch(
-          `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
-          {
-            method: "POST",
-            body: formData,
-          }
+          `https://api.cloudinary.com/v1_1/${
+            import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
+          }/image/upload`,
+          { method: "POST", body: formData }
         );
 
         const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error?.message || "Image upload failed");
-        }
-
+        if (!response.ok) throw new Error("Image upload failed");
         imageUrls.push(data.secure_url);
       }
 
-      const productData = {
+      const finalCategory =
+        selectedCategories[selectedCategories.length - 1] ||
+        selectedCategories[0];
+
+      await addDoc(collection(db, "products"), {
         name: product.name,
         description: product.description,
         price: parseFloat(product.price),
-        category: product.category,
+        category: finalCategory,
         stock: parseInt(product.stock, 10),
-        imageUrls: imageUrls,
+        imageUrls,
         createdAt: new Date(),
-      };
+      });
 
-      await addDoc(collection(db, "products"), productData);
-
-      toast.success("Product added successfully");
+      toast.success("Product added!");
       navigate("/products");
     } catch (error) {
-      console.error("Error adding product:", error);
-      toast.error("Failed to add product. Please try again.");
-    } finally {
-      setLoading(false);
+      toast.error("Failed to add product.");
     }
+    setLoading(false);
   };
 
   if (loading) {
@@ -161,6 +200,7 @@ export default function AddProduct() {
 
   return (
     <div className="p-6">
+      {/* Title and Cancel Button */}
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-secondary-900 dark:text-white">
           Add New Product
@@ -174,25 +214,27 @@ export default function AddProduct() {
         </Button>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Form */}
+      <form onSubmit={saveProduct} className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Basic Information */}
+          {/* Product Details */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
-              Basic Information
+              Product Details
             </h2>
-
             <div className="space-y-4">
+              {/* Name */}
               <Input
                 label="Product Name"
                 id="name"
                 name="name"
                 type="text"
                 value={product.name}
-                onChange={handleChange}
+                onChange={updateInput}
                 required
                 placeholder="Enter product name"
               />
+              {/* Description */}
               <div>
                 <label
                   htmlFor="description"
@@ -204,18 +246,13 @@ export default function AddProduct() {
                   id="description"
                   name="description"
                   value={product.description}
-                  onChange={handleChange}
+                  onChange={updateInput}
                   placeholder="Enter product description"
                   rows={4}
-                  className="
-                    w-full rounded-md shadow-sm border
-                    border-secondary-300 focus:border-primary-500 focus:ring-primary-500
-                    bg-white dark:bg-secondary-800 dark:border-secondary-600 dark:text-white
-                    py-2 px-3 text-sm
-                    focus:outline-none focus:ring-2
-                  "
+                  className="w-full rounded-md shadow-sm border border-secondary-300 focus:border-primary-500 focus:ring-primary-500 bg-white dark:bg-secondary-800 dark:border-secondary-600 dark:text-white py-2 px-3 text-sm focus:outline-none focus:ring-2"
                 />
               </div>
+              {/* Price and Stock */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   label="Price ($)"
@@ -223,44 +260,49 @@ export default function AddProduct() {
                   name="price"
                   type="number"
                   value={product.price}
-                  onChange={handleChange}
+                  onChange={updateInput}
                   required
                   min="0"
                   step="0.01"
                   placeholder="0.00"
                 />
-
                 <Input
                   label="Stock"
                   id="stock"
                   name="stock"
                   type="number"
                   value={product.stock}
-                  onChange={handleChange}
+                  onChange={updateInput}
                   required
                   min="0"
                   placeholder="0"
                 />
               </div>
-              <Select
-                label="Category"
-                id="category"
-                name="category"
-                value={product.category}
-                onChange={handleChange}
-                options={categories}
-                required
-              />
+              {/* Category Dropdowns */}
+              {getDropdowns().map((dropdown) => (
+                <Select
+                  key={dropdown.level}
+                  label={dropdown.label}
+                  id={`category-${dropdown.level}`}
+                  name={`category-${dropdown.level}`}
+                  value={dropdown.value}
+                  onChange={(e) =>
+                    updateCategory(dropdown.level, e.target.value)
+                  }
+                  options={dropdown.options}
+                  required={dropdown.level === 0}
+                />
+              ))}
             </div>
           </Card>
 
-          {/* Product Images */}
+          {/* Images */}
           <Card>
             <h2 className="text-lg font-semibold text-secondary-900 dark:text-white mb-4">
               Product Images
             </h2>
-
             <div className="space-y-4">
+              {/* Upload Area */}
               <div className="border-2 border-dashed border-secondary-300 dark:border-secondary-700 rounded-lg p-4">
                 <div className="text-center">
                   <FiUpload className="mx-auto h-12 w-12 text-secondary-400" />
@@ -275,7 +317,7 @@ export default function AddProduct() {
                         type="file"
                         multiple
                         accept="image/*"
-                        onChange={handleImageUpload}
+                        onChange={addImages}
                         className="sr-only"
                       />
                     </label>
@@ -285,7 +327,7 @@ export default function AddProduct() {
                   </p>
                 </div>
               </div>
-
+              {/* Image Previews */}
               {previewImages.length > 0 && (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                   {previewImages.map((image, index) => (
@@ -312,7 +354,7 @@ export default function AddProduct() {
           </Card>
         </div>
 
-        {/* Form Actions */}
+        {/* Save and Cancel Buttons */}
         <div className="flex justify-end space-x-3">
           <Button
             variant="secondary"
@@ -333,4 +375,6 @@ export default function AddProduct() {
       </form>
     </div>
   );
-}
+};
+
+export default AddProduct;
