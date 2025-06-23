@@ -9,6 +9,7 @@ import Alert from "./Alert";
 import Header from "./Header";
 import Sidebar from "./Sidebar";
 import Loading from "./Loading";
+import UploadWidget from "./UploadWidget";
 
 export {
   Button,
@@ -22,4 +23,5 @@ export {
   Header,
   Sidebar,
   Loading,
+  UploadWidget,
 };

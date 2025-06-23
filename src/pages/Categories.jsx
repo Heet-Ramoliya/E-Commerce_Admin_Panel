@@ -7,7 +7,14 @@ import {
   FiChevronDown,
 } from "react-icons/fi";
 import { toast } from "react-toastify";
-import { Input, Button, Card, Modal, Loading } from "../components";
+import {
+  Input,
+  Button,
+  Card,
+  Modal,
+  Loading,
+  UploadWidget,
+} from "../components";
 import { db } from "../Config/Firebase";
 import {
   onSnapshot,
@@ -29,9 +36,10 @@ export default function Categories() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAddSubModal, setShowAddSubModal] = useState(false);
   const [currentCategory, setCurrentCategory] = useState(null);
-  const [newCategory, setNewCategory] = useState({ name: "" });
+  const [newCategory, setNewCategory] = useState({ name: "", imageUrl: "" });
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedCategories, setExpandedCategories] = useState({});
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -64,6 +72,7 @@ export default function Categories() {
     setCurrentCategory(category);
     setNewCategory({
       name: category.name,
+      imageUrl: category.imageUrl || "",
     });
     setShowEditModal(true);
   };
@@ -75,7 +84,7 @@ export default function Categories() {
 
   const openAddSubModal = (category) => {
     setCurrentCategory(category);
-    setNewCategory({ name: "" });
+    setNewCategory({ name: "", imageUrl: "" });
     setShowAddSubModal(true);
   };
 
@@ -85,6 +94,23 @@ export default function Categories() {
       ...newCategory,
       [name]: value,
     });
+  };
+
+  // Handle image upload success
+  const handleImageUpload = (imageUrl) => {
+    setNewCategory((prev) => ({ ...prev, imageUrl }));
+    setIsUploading(false); // Reset upload status
+  };
+
+  // Handle upload start
+  const handleUploadStart = () => {
+    setIsUploading(true);
+  };
+
+  // Remove uploaded image
+  const handleRemoveImage = () => {
+    setNewCategory((prev) => ({ ...prev, imageUrl: "" }));
+    setIsUploading(false);
   };
 
   const addCategory = async () => {
@@ -112,11 +138,13 @@ export default function Categories() {
 
       await addDoc(collection(db, "categories"), {
         name: nameFormatted,
+        imageUrl: newCategory.imageUrl || "",
         parentId: null,
       });
       toast.success("Successfully added category.");
       setShowAddModal(false);
-      setNewCategory({ name: "" });
+      setNewCategory({ name: "", imageUrl: "" });
+      setIsUploading(false);
     } catch (error) {
       toast.error("Failed to add category.");
       console.error(error);
@@ -148,12 +176,14 @@ export default function Categories() {
 
       await addDoc(collection(db, "categories"), {
         name: nameFormatted,
+        imageUrl: newCategory.imageUrl || "",
         parentId: currentCategory.id,
       });
       toast.success("Successfully added subcategory.");
       setShowAddSubModal(false);
-      setNewCategory({ name: "" });
+      setNewCategory({ name: "", imageUrl: "" });
       setCurrentCategory(null);
+      setIsUploading(false);
     } catch (error) {
       toast.error("Failed to add subcategory.");
       console.error(error);
@@ -188,11 +218,13 @@ export default function Categories() {
 
       await updateDoc(doc(db, "categories", currentCategory.id), {
         name: nameFormatted,
+        imageUrl: newCategory.imageUrl || "",
       });
       toast.success("Successfully updated category.");
       setShowEditModal(false);
       setCurrentCategory(null);
-      setNewCategory({ name: "" });
+      setNewCategory({ name: "", imageUrl: "" });
+      setIsUploading(false);
     } catch (error) {
       toast.error("Failed to update category.");
       console.error(error);
@@ -278,6 +310,13 @@ export default function Categories() {
                 onClick={() => toggleExpand(category.id)}
               />
             )}
+            {category.imageUrl && (
+              <img
+                src={`${category.imageUrl}?w=32&h=32&f=auto&q=80`}
+                alt={category.name}
+                className="w-8 h-8 object-cover rounded mr-2"
+              />
+            )}
             {category.name}
           </span>
         </div>
@@ -317,7 +356,7 @@ export default function Categories() {
   const renderCategories = (categories, startIdx = 0) => {
     let idx = startIdx;
     return categories.flatMap((category) => {
-      idx++; // Increment for the current category
+      idx++;
       const rows = [renderCategoryRow(category, idx - 1)];
       if (
         expandedCategories[category.id] &&
@@ -346,7 +385,6 @@ export default function Categories() {
           Add Category
         </Button>
       </div>
-      {/* Search */}
       <Card className="mb-6">
         <Input
           placeholder="Search categories..."
@@ -356,7 +394,6 @@ export default function Categories() {
           className="w-full md:w-64"
         />
       </Card>
-      {/* Categories Table  */}
       {loading ? (
         <Loading size="md" message="Loading categories..." />
       ) : categoryTree.length === 0 ? (
@@ -390,7 +427,8 @@ export default function Categories() {
         isOpen={showAddModal}
         onClose={() => {
           setShowAddModal(false);
-          setNewCategory({ name: "" });
+          setNewCategory({ name: "", imageUrl: "" });
+          setIsUploading(false);
         }}
         title="Add New Category"
         size="md"
@@ -405,16 +443,50 @@ export default function Categories() {
             onChange={handleInputChange}
             required
             placeholder="Enter category name"
+            disabled={isUploading}
           />
+          <div>
+            <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-1">
+              Category Image
+            </label>
+            <div className="flex items-center space-x-3">
+              {!newCategory.imageUrl && (
+                <UploadWidget
+                  onUploadSuccess={handleImageUpload}
+                  onUploadStart={handleUploadStart}
+                />
+              )}
+              {newCategory.imageUrl && (
+                <>
+                  <img
+                    src={`${newCategory.imageUrl}?w=64&h=64&f=auto&q=80`}
+                    alt="Preview"
+                    className="w-16 h-16 object-cover rounded"
+                  />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleRemoveImage}
+                    className="hover:bg-red-700 transition-colors"
+                    disabled={isUploading}
+                  >
+                    Remove Image
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div className="flex justify-end space-x-3 mt-6">
           <Button
             variant="secondary"
             onClick={() => {
               setShowAddModal(false);
-              setNewCategory({ name: "" });
+              setNewCategory({ name: "", imageUrl: "" });
+              setIsUploading(false);
             }}
             className="hover:bg-gray-400 transition-colors"
+            disabled={isUploading}
           >
             Cancel
           </Button>
@@ -422,6 +494,7 @@ export default function Categories() {
             variant="primary"
             onClick={addCategory}
             className="hover:bg-primary-600 transition-colors"
+            disabled={isUploading}
           >
             Add Category
           </Button>
@@ -432,8 +505,9 @@ export default function Categories() {
         isOpen={showAddSubModal}
         onClose={() => {
           setShowAddSubModal(false);
-          setNewCategory({ name: "" });
+          setNewCategory({ name: "", imageUrl: "" });
           setCurrentCategory(null);
+          setIsUploading(false);
         }}
         title={`Add Subcategory to ${currentCategory?.name || ""}`}
         size="md"
@@ -448,17 +522,51 @@ export default function Categories() {
             onChange={handleInputChange}
             required
             placeholder="Enter subcategory name"
+            disabled={isUploading}
           />
+          <div>
+            <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-1">
+              Subcategory Image
+            </label>
+            <div className="flex items-center space-x-3">
+              {!newCategory.imageUrl && (
+                <UploadWidget
+                  onUploadSuccess={handleImageUpload}
+                  onUploadStart={handleUploadStart}
+                />
+              )}
+              {newCategory.imageUrl && (
+                <>
+                  <img
+                    src={`${newCategory.imageUrl}?w=64&h=64&f=auto&q=80`}
+                    alt="Preview"
+                    className="w-16 h-16 object-cover rounded"
+                  />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleRemoveImage}
+                    className="hover:bg-red-700 transition-colors"
+                    disabled={isUploading}
+                  >
+                    Remove Image
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div className="flex justify-end space-x-3 mt-6">
           <Button
             variant="secondary"
             onClick={() => {
               setShowAddSubModal(false);
-              setNewCategory({ name: "" });
+              setNewCategory({ name: "", imageUrl: "" });
               setCurrentCategory(null);
+              setIsUploading(false);
             }}
             className="hover:bg-gray-400 transition-colors"
+            disabled={isUploading}
           >
             Cancel
           </Button>
@@ -466,6 +574,7 @@ export default function Categories() {
             variant="primary"
             onClick={addSubCategory}
             className="hover:bg-primary-600 transition-colors"
+            disabled={isUploading}
           >
             Add Subcategory
           </Button>
@@ -477,7 +586,8 @@ export default function Categories() {
         onClose={() => {
           setShowEditModal(false);
           setCurrentCategory(null);
-          setNewCategory({ name: "" });
+          setNewCategory({ name: "", imageUrl: "" });
+          setIsUploading(false);
         }}
         title="Edit Category"
         size="md"
@@ -492,7 +602,39 @@ export default function Categories() {
             onChange={handleInputChange}
             required
             placeholder="Enter category name"
+            disabled={isUploading}
           />
+          <div>
+            <label className="block text-sm font-medium text-secondary-700 dark:text-secondary-200 mb-1">
+              Category Image
+            </label>
+            <div className="flex items-center space-x-3">
+              {!newCategory.imageUrl && (
+                <UploadWidget
+                  onUploadSuccess={handleImageUpload}
+                  onUploadStart={handleUploadStart}
+                />
+              )}
+              {newCategory.imageUrl && (
+                <>
+                  <img
+                    src={`${newCategory.imageUrl}?w=64&h=64&f=auto&q=80`}
+                    alt="Preview"
+                    className="w-16 h-16 object-cover rounded"
+                  />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={handleRemoveImage}
+                    className="hover:bg-red-700 transition-colors"
+                    disabled={isUploading}
+                  >
+                    Remove Image
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
         <div className="flex justify-end space-x-3 mt-6">
           <Button
@@ -500,9 +642,11 @@ export default function Categories() {
             onClick={() => {
               setShowEditModal(false);
               setCurrentCategory(null);
-              setNewCategory({ name: "" });
+              setNewCategory({ name: "", imageUrl: "" });
+              setIsUploading(false);
             }}
             className="hover:bg-gray-200 transition-colors"
+            disabled={isUploading}
           >
             Cancel
           </Button>
@@ -510,6 +654,7 @@ export default function Categories() {
             variant="primary"
             onClick={updateCategory}
             className="hover:bg-primary-600 transition-colors"
+            disabled={isUploading}
           >
             Update Category
           </Button>
