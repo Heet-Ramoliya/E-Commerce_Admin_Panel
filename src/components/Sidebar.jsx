@@ -11,6 +11,7 @@ import {
   FiChevronDown,
   FiChevronUp,
 } from "react-icons/fi";
+import { IoBusinessOutline } from "react-icons/io5";
 import { useAuth } from "../contexts/AuthContext";
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
@@ -47,6 +48,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       path: "/users",
       name: "Users",
       icon: <FiUsers className="w-5 h-5" />,
+    },
+    {
+      path: "/company",
+      name: "company",
+      icon: <IoBusinessOutline className="w-5 h-5" />,
     },
   ];
 

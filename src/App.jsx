@@ -14,6 +14,7 @@ import OrderDetails from "./pages/OrderDetails";
 import Users from "./pages/Users";
 import NotFound from "./pages/NotFound";
 import { Loading } from "./components";
+import CompanySetting from "./pages/CompanySetting";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -52,6 +53,7 @@ function App() {
         <Route path="orders" element={<Orders />} />
         <Route path="orders/:id" element={<OrderDetails />} />
         <Route path="users" element={<Users />} />
+        <Route path="company" element={<CompanySetting />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />
